@@ -136,7 +136,7 @@ export class SessionAliasGenerator {
           alias = this.generatePhoneAlias();
           break;
         case 'person':
-          alias = this.generatePersonAlias();
+          alias = this.generatePersonAlias(match);
           break;
         case 'project':
           alias = this.generateProjectAlias(match);
@@ -238,6 +238,15 @@ export class SessionAliasGenerator {
       this.dbPassCounter++;
       return `DB_PASS_${this.dbPassCounter}`;
     }
+    if (kind === 'log_credential') {
+      const keyName = (match.metadata?.keyName as string || '').toLowerCase();
+      if (keyName.includes('pass') || keyName.includes('pwd')) {
+        this.dbPassCounter++;
+        return `DB_PASS_${this.dbPassCounter}`;
+      }
+      this.secretCounter++;
+      return `SECRET_KEY_${this.secretCounter}`;
+    }
 
     this.secretCounter++;
     return `SECRET_KEY_${this.secretCounter}`;
@@ -257,7 +266,7 @@ export class SessionAliasGenerator {
         // Sanitize sensitive query parameters
         let search = parsed.search;
         search = search.replace(
-          /([?&](?:token|key|secret|sig|signature|auth|apikey|access_token|password)=)([^&"'\s#]+)/gi,
+          /([?&](?:token|key|api_key|apiKey|api-key|secret|sig|signature|auth|apikey|access_token|password|client_secret)=)([^&"'\s#]+)/gi,
           (_full, prefix, secretVal) => {
             let secretAlias = this.originalToAliasMap.get(secretVal);
             if (!secretAlias) {
@@ -342,6 +351,8 @@ export class SessionAliasGenerator {
       authSection = `${userAlias}:${passAlias}@`;
     } else if (userAlias) {
       authSection = `${userAlias}@`;
+    } else if (passAlias) {
+      authSection = `:${passAlias}@`;
     }
 
     const portSection = port ? `:${port}` : '';
@@ -356,7 +367,11 @@ export class SessionAliasGenerator {
     return `+1-555-${padded}`;
   }
 
-  private generatePersonAlias(): string {
+  private generatePersonAlias(match?: RawEntityMatch): string {
+    if (match?.metadata?.isDbUser) {
+      this.dbUserCounter++;
+      return `db_user_${this.dbUserCounter}`;
+    }
     this.personCounter++;
     return `Person_${this.personCounter}`;
   }

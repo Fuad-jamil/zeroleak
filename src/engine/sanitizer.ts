@@ -9,7 +9,7 @@ import {
 import { detectDbUris } from './detectors/dbUriDetector';
 import { detectEmails } from './detectors/emailDetector';
 import { detectIps } from './detectors/ipDetector';
-import { detectSecrets, calculateEntropy } from './detectors/secretDetector';
+import { detectSecrets, calculateEntropy, COMMON_SECRET_STOPWORDS } from './detectors/secretDetector';
 import { detectUrls } from './detectors/urlDetector';
 import { detectPhoneNumbers } from './detectors/phoneDetector';
 import { detectNamesAndProjects } from './detectors/nameDetector';
@@ -158,6 +158,75 @@ export function sanitizeText(
     });
 
     countsByOriginal.set(raw.original, (countsByOriginal.get(raw.original) || 0) + 1);
+  }
+
+  // Second Pass: Global Knowledge & Credential Propagation
+  // Any credential, username, secret token, phone, or endpoint registered in aliasGenerator
+  // (e.g. from connection URIs, URLs, .env, or logs) is guaranteed to be detected and masked
+  // if it appears anywhere else in the document outside already matched ranges.
+  const registeredMappings = aliasGenerator.getAllMappings();
+  registeredMappings.sort((a, b) => b.original.length - a.original.length);
+
+  for (const item of registeredMappings) {
+    const orig = item.original;
+    if (
+      !orig ||
+      orig.length < 3 ||
+      COMMON_SECRET_STOPWORDS.has(orig.toLowerCase())
+    ) {
+      continue;
+    }
+
+    const escaped = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = /^[a-zA-Z0-9_-]+$/.test(orig)
+      ? new RegExp(`\\b${escaped}\\b`, 'g')
+      : new RegExp(escaped, 'g');
+
+    let propMatch: RegExpExecArray | null;
+    while ((propMatch = regex.exec(inputText)) !== null) {
+      const start = propMatch.index;
+      const end = start + orig.length;
+
+      let isOccupied = false;
+      for (let i = start; i < end; i++) {
+        if (occupied[i] === 1) {
+          isOccupied = true;
+          break;
+        }
+      }
+
+      if (!isOccupied) {
+        for (let i = start; i < end; i++) {
+          occupied[i] = 1;
+        }
+
+        const isExplicitlyDisabled = existingDisabledMap.get(orig) === true;
+        detectedEntities.push({
+          category: item.alias.startsWith('db_user')
+            ? 'person'
+            : item.alias.startsWith('DB_PASS') || item.alias.startsWith('SECRET')
+            ? 'secret'
+            : item.alias.startsWith('10.') || item.alias.startsWith('192.') || item.alias.startsWith('172.')
+            ? 'ipv4'
+            : item.alias.startsWith('Person')
+            ? 'person'
+            : item.alias.startsWith('+1-555')
+            ? 'phone'
+            : item.alias.startsWith('Project_') || item.alias.startsWith('Operation_')
+            ? 'project'
+            : 'custom',
+          original: orig,
+          startIndex: start,
+          endIndex: end,
+          label: 'Propagated Credential Match',
+          alias: item.alias,
+          enabled: !isExplicitlyDisabled,
+          id: `prop-${start}-${end}`,
+        });
+
+        countsByOriginal.set(orig, (countsByOriginal.get(orig) || 0) + 1);
+      }
+    }
   }
 
   // Build the list of active AliasMappings for the vault table

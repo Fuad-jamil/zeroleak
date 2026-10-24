@@ -1,4 +1,37 @@
 import { RawEntityMatch } from '../types';
+import { RECOVERY_MNEMONIC_PHRASE_REGEX } from '../patterns';
+
+// Common stop words and protocol keywords that must never be considered secrets
+export const COMMON_SECRET_STOPWORDS = new Set([
+  'bearer',
+  'basic',
+  'token',
+  'secret',
+  'password',
+  'passwd',
+  'key',
+  'apikey',
+  'auth',
+  'authorization',
+  'true',
+  'false',
+  'null',
+  'none',
+  'undefined',
+  'http',
+  'https',
+  'post',
+  'get',
+  'put',
+  'delete',
+  'patch',
+  'head',
+  'options',
+  'development',
+  'production',
+  'staging',
+  'test',
+]);
 
 // Shannon entropy calculation
 export function calculateEntropy(str: string): number {
@@ -61,7 +94,7 @@ const KNOWN_PATTERNS: { regex: RegExp; label: string; kind: string }[] = [
     label: 'Slack Token',
     kind: 'slack_token',
   },
-  // Bearer Token in authorization headers
+  // Bearer Token in authorization headers (extracts the actual token, leaving Bearer keyword intact)
   {
     regex: /(?:Bearer\s+)([A-Za-z0-9_.\-~+/]{20,}={0,2})/gi,
     label: 'Bearer Token',
@@ -81,10 +114,16 @@ const KNOWN_PATTERNS: { regex: RegExp; label: string; kind: string }[] = [
   },
 ];
 
+// Key-Value pairs in logs and application text: e.g. host=... user=amal_admin password=FakePass_9x!
+const LOG_KV_SECRET_REGEX =
+  /\b(password|passwd|pwd|pass|token|api_key|apiKey|api-key|secret|client_secret|auth_token)\s*[:=]\s*(["']?)([^\s"';,]+)\2/gi;
+
+const LOG_KV_USER_REGEX =
+  /\b(user|username|user_name|db_user|dbuser)\s*[:=]\s*(["']?)([a-zA-Z0-9_.-]{3,30})\2/gi;
+
 // .env and JSON Key-Value assignments
-// Matches: KEY=value or "key": "value" where key contains SECRET, PASSWORD, TOKEN, KEY, API, AUTH, CREDENTIALS
 const ENV_JSON_ASSIGNMENT_REGEX =
-  /(?:^|[\n\r;,{]\s*)(?:export\s+)?(?:["']?([A-Za-z0-9_]*(?:SECRET|PASSWORD|PASS|TOKEN|KEY|APIKEY|AUTH|CREDENTIALS|PRIVATE|SIGNATURE)[A-Za-z0-9_]*)["']?)\s*(?:=|:)\s*(["']?)([^"'\r\n;,]+?)\2(?=[\r\n;,}]|$)/gi;
+  /(?:^|[\n\r;,{]\s*|\s+)(?:export\s+)?(?:["']?([A-Za-z0-9_]*(?:SECRET|PASSWORD|PASS|TOKEN|KEY|APIKEY|AUTH|CREDENTIALS|PRIVATE|SIGNATURE)[A-Za-z0-9_]*)["']?)\s*(?:=|:)\s*(["']?)([^"'\r\n;,]+?)\2(?=[\r\n;,}\s]|$)/gi;
 
 export function detectSecrets(text: string): RawEntityMatch[] {
   const matches: RawEntityMatch[] = [];
@@ -94,14 +133,13 @@ export function detectSecrets(text: string): RawEntityMatch[] {
     regex.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(text)) !== null) {
-      // If group 1 exists, use it; otherwise match[0]
       const val = match[1] || match[0];
       const offset = match[0].indexOf(val);
       const start = match.index + (offset >= 0 ? offset : 0);
       const end = start + val.length;
 
-      // Filter out obvious false positives like regular english words or common uuid placeholders
       if (val.length < 8 && kind !== 'uuid') continue;
+      if (COMMON_SECRET_STOPWORDS.has(val.toLowerCase())) continue;
 
       matches.push({
         category: 'secret',
@@ -114,20 +152,89 @@ export function detectSecrets(text: string): RawEntityMatch[] {
     }
   }
 
-  // 2. Detect Key-Value assignments in .env or JSON configs
+  // 2. Recovery Mnemonic Phrases (BIP-39 seed phrases)
+  RECOVERY_MNEMONIC_PHRASE_REGEX.lastIndex = 0;
+  let recMatch: RegExpExecArray | null;
+  while ((recMatch = RECOVERY_MNEMONIC_PHRASE_REGEX.exec(text)) !== null) {
+    const phrase = recMatch[1]?.trim();
+    if (phrase && phrase.length >= 10) {
+      const offset = recMatch[0].lastIndexOf(phrase);
+      const start = recMatch.index + offset;
+      matches.push({
+        category: 'secret',
+        original: phrase,
+        startIndex: start,
+        endIndex: start + phrase.length,
+        label: 'Recovery Seed Phrase',
+        metadata: { kind: 'seed_phrase' },
+      });
+    }
+  }
+
+  // 3. Log Key-Value Secrets (e.g. password=FakePass_9x! in logs)
+  LOG_KV_SECRET_REGEX.lastIndex = 0;
+  let logKvMatch: RegExpExecArray | null;
+  while ((logKvMatch = LOG_KV_SECRET_REGEX.exec(text)) !== null) {
+    const keyName = logKvMatch[1];
+    let rawVal = logKvMatch[3]?.trim();
+
+    if (!rawVal || rawVal.length < 3) continue;
+    if (COMMON_SECRET_STOPWORDS.has(rawVal.toLowerCase())) continue;
+
+    const offset = logKvMatch[0].lastIndexOf(rawVal);
+    const start = logKvMatch.index + offset;
+
+    matches.push({
+      category: 'secret',
+      original: rawVal,
+      startIndex: start,
+      endIndex: start + rawVal.length,
+      label: `Log Credential (${keyName})`,
+      metadata: { kind: 'log_credential', keyName, isLogCred: true },
+    });
+  }
+
+  // 4. Log Key-Value Usernames (e.g. user=amal_admin in logs)
+  LOG_KV_USER_REGEX.lastIndex = 0;
+  let logUserMatch: RegExpExecArray | null;
+  while ((logUserMatch = LOG_KV_USER_REGEX.exec(text)) !== null) {
+    const keyName = logUserMatch[1];
+    const rawVal = logUserMatch[3]?.trim();
+
+    if (!rawVal || rawVal.length < 3) continue;
+    if (COMMON_SECRET_STOPWORDS.has(rawVal.toLowerCase())) continue;
+
+    const offset = logUserMatch[0].lastIndexOf(rawVal);
+    const start = logUserMatch.index + offset;
+
+    matches.push({
+      category: 'person',
+      original: rawVal,
+      startIndex: start,
+      endIndex: start + rawVal.length,
+      label: `User/Admin (${keyName})`,
+      metadata: { kind: 'db_user', keyName, isDbUser: true },
+    });
+  }
+
+  // 5. Detect Key-Value assignments in .env or JSON configs
   ENV_JSON_ASSIGNMENT_REGEX.lastIndex = 0;
   let envMatch: RegExpExecArray | null;
   while ((envMatch = ENV_JSON_ASSIGNMENT_REGEX.exec(text)) !== null) {
     const keyName = envMatch[1];
-    const rawVal = envMatch[3]?.trim();
+    let rawVal = envMatch[3]?.trim();
 
-    if (!rawVal || rawVal.length < 4) continue;
-    // Skip common non-sensitive placeholders
-    if (['true', 'false', 'null', 'undefined', '0', '1', 'none', 'development', 'production', 'test'].includes(rawVal.toLowerCase())) {
+    if (!rawVal || rawVal.length < 3) continue;
+
+    // Handle Bearer <token> in AUTH_HEADER: strip 'Bearer ' and only mask the actual token
+    if (/^Bearer\s+/i.test(rawVal)) {
+      rawVal = rawVal.replace(/^Bearer\s+/i, '').trim();
+    }
+
+    if (COMMON_SECRET_STOPWORDS.has(rawVal.toLowerCase())) {
       continue;
     }
 
-    // Find position of the value in the full matched string
     const fullMatch = envMatch[0];
     const valueIndexInMatch = fullMatch.lastIndexOf(rawVal);
     if (valueIndexInMatch === -1) continue;
@@ -151,4 +258,3 @@ export function detectSecrets(text: string): RawEntityMatch[] {
 
   return matches;
 }
-
