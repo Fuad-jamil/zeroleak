@@ -1,0 +1,38 @@
+{
+  "name": "zeroleak",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "author": "Fuad Jamil (https://github.com/Fuad-jamil)",
+  "homepage": "https://github.com/Fuad-jamil/zeroleak#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fuad-jamil/zeroleak.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Fuad-jamil/zeroleak/issues"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.475.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.5.4"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.45",
+    "tailwindcss": "^3.4.11",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.2"
+  }
+}
+

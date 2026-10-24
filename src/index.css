@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #F4F5F7;
+    color: #0F172A;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+  }
+
+  .dark body {
+    background-color: #0B0F19;
+    color: #F8FAFC;
+  }
+}
+
+/* Subtle SaaS canvas grid/dot background */
+.canvas-bg {
+  background-color: #F4F5F7;
+  background-image: radial-gradient(rgba(100, 116, 139, 0.12) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.dark .canvas-bg {
+  background-color: #0B0F19;
+  background-image: radial-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Modern minimalist scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(51, 65, 85, 0.5);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.8);
+}
+
+/* Monospace editor styling */
+.editor-font {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+
+/* Smooth multi-line token pill box-decoration break */
+.alias-pill {
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* Smooth RTL/LTR support for Arabic text mixed with code */
+[dir="auto"] {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
