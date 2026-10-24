@@ -207,9 +207,13 @@ export class SessionAliasGenerator {
     const username = (match.metadata?.username as string) || 'user';
     const domain = (match.metadata?.domain as string) || 'domain.com';
 
+    // Preserve original top-level domain if present (e.g. invalid, com, org, net)
+    const tldMatch = domain.match(/\.([a-zA-Z]{2,10})$/);
+    const tld = tldMatch ? tldMatch[1] : 'com';
+
     if (!this.emailDomainMap.has(domain)) {
       this.domainCounter++;
-      this.emailDomainMap.set(domain, `domain_${this.domainCounter}.com`);
+      this.emailDomainMap.set(domain, `domain_${this.domainCounter}.${tld}`);
     }
     const domainAlias = this.emailDomainMap.get(domain)!;
 
@@ -253,34 +257,126 @@ export class SessionAliasGenerator {
   }
 
   /**
-   * URLs: Preserves URL path, maps host consistently, sanitizes query parameters
+   * URLs: Structural parsing and reconstruction.
+   * - Preserves scheme, host port, paths, fragment, and nonsensitive query parameters.
+   * - Sanitizes embedded user-info credentials (user:pass@host).
+   * - Sanitizes sensitive query parameters (token, session, code, secret, password, api_key, etc.).
+   * - Sanitizes email parameters (e.g. email=ahmad.mansour@example.invalid).
+   * - Preserves nonsensitive parameters (redirect=/dashboard, region, v, etc.).
    */
   private generateUrlAlias(match: RawEntityMatch): string {
     const rawUrl = match.original;
     try {
       const parsed = new URL(rawUrl);
-      const hostAlias = this.getOrCreateHostAlias(parsed.hostname);
 
-      let reconstructed = `${parsed.protocol}//${hostAlias}${parsed.port ? `:${parsed.port}` : ''}${parsed.pathname}`;
+      // 1. Embedded credentials in user-info: https://admin:password@host/
+      let authPart = '';
+      if (parsed.username || parsed.password) {
+        let userAlias = '';
+        let passAlias = '';
+        if (parsed.username) {
+          if (this.originalToAliasMap.has(parsed.username)) {
+            userAlias = this.originalToAliasMap.get(parsed.username)!;
+          } else {
+            this.dbUserCounter++;
+            userAlias = `db_user_${this.dbUserCounter}`;
+            this.originalToAliasMap.set(parsed.username, userAlias);
+            this.aliasToOriginalMap.set(userAlias, parsed.username);
+          }
+        }
+        if (parsed.password) {
+          if (this.originalToAliasMap.has(parsed.password)) {
+            passAlias = this.originalToAliasMap.get(parsed.password)!;
+          } else {
+            this.dbPassCounter++;
+            passAlias = `DB_PASS_${this.dbPassCounter}`;
+            this.originalToAliasMap.set(parsed.password, passAlias);
+            this.aliasToOriginalMap.set(passAlias, parsed.password);
+          }
+        }
+        if (userAlias && passAlias) authPart = `${userAlias}:${passAlias}@`;
+        else if (userAlias) authPart = `${userAlias}@`;
+        else if (passAlias) authPart = `:${passAlias}@`;
+      }
+
+      // 2. Hostname: If IP, use valid IPv4 alias; if domain, use host alias
+      let hostAlias = '';
+      if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(parsed.hostname)) {
+        hostAlias = this.generateValidIpv4Alias(parsed.hostname);
+      } else {
+        hostAlias = this.getOrCreateHostAlias(parsed.hostname);
+      }
+
+      // 3. Port & Path
+      const portPart = parsed.port ? `:${parsed.port}` : '';
+      const pathPart = parsed.pathname;
+
+      // 4. Query Parameters
+      let searchPart = '';
       if (parsed.search) {
-        // Sanitize sensitive query parameters
-        let search = parsed.search;
-        search = search.replace(
-          /([?&](?:token|key|api_key|apiKey|api-key|secret|sig|signature|auth|apikey|access_token|password|client_secret)=)([^&"'\s#]+)/gi,
-          (_full, prefix, secretVal) => {
-            let secretAlias = this.originalToAliasMap.get(secretVal);
+        const searchParams = new URLSearchParams(parsed.search);
+        const reconstructedParams: string[] = [];
+
+        for (const [key, val] of searchParams.entries()) {
+          const lowerKey = key.toLowerCase();
+          const isSensitiveKey =
+            lowerKey.includes('token') ||
+            lowerKey.includes('session') ||
+            lowerKey.includes('code') ||
+            lowerKey.includes('secret') ||
+            lowerKey.includes('password') ||
+            lowerKey.includes('key') ||
+            lowerKey.includes('auth') ||
+            lowerKey.includes('sig') ||
+            lowerKey.includes('signature') ||
+            lowerKey.includes('credential') ||
+            lowerKey.includes('jwt') ||
+            lowerKey === 'pwd';
+
+          const isEmailVal = val.includes('@') || lowerKey === 'email';
+
+          if (isEmailVal) {
+            let emailAlias = this.originalToAliasMap.get(val);
+            if (!emailAlias) {
+              const atIdx = val.indexOf('@');
+              const u = atIdx > 0 ? val.slice(0, atIdx) : 'user';
+              const d = atIdx > 0 ? val.slice(atIdx + 1) : 'example.com';
+              emailAlias = this.generateEmailAlias({
+                category: 'email',
+                original: val,
+                startIndex: 0,
+                endIndex: val.length,
+                label: 'Email',
+                metadata: { username: u, domain: d },
+              });
+              this.originalToAliasMap.set(val, emailAlias);
+              this.aliasToOriginalMap.set(emailAlias, val);
+            }
+            reconstructedParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(emailAlias)}`);
+          } else if (isSensitiveKey) {
+            let secretAlias = this.originalToAliasMap.get(val);
             if (!secretAlias) {
               this.secretCounter++;
               secretAlias = `SECRET_KEY_${this.secretCounter}`;
-              this.originalToAliasMap.set(secretVal, secretAlias);
-              this.aliasToOriginalMap.set(secretAlias, secretVal);
+              this.originalToAliasMap.set(val, secretAlias);
+              this.aliasToOriginalMap.set(secretAlias, val);
             }
-            return `${prefix}${secretAlias}`;
+            reconstructedParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(secretAlias)}`);
+          } else {
+            // Non-sensitive parameter (e.g. redirect=/dashboard, region=us-east-1) is PRESERVED!
+            reconstructedParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(val)}`);
           }
-        );
-        reconstructed += search;
+        }
+
+        if (reconstructedParams.length > 0) {
+          searchPart = `?${reconstructedParams.join('&')}`;
+        }
       }
-      return reconstructed;
+
+      // 5. Hash / Fragment
+      const hashPart = parsed.hash || '';
+
+      return `${parsed.protocol}//${authPart}${hostAlias}${portPart}${pathPart}${searchPart}${hashPart}`;
     } catch {
       this.hostCounter++;
       return `https://internal-host-${this.hostCounter}.local`;

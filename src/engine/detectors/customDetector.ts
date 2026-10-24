@@ -7,16 +7,20 @@ export function detectCustomRules(
   const matches: RawEntityMatch[] = [];
 
   for (const rule of rules) {
-    if (!rule.enabled || !rule.term.trim()) continue;
+    if (!rule.enabled || !rule.term?.trim()) continue;
 
-    // Escape regex special characters if searching plain string
-    const escaped = rule.term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const term = rule.term.trim();
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const flags = rule.caseSensitive ? 'g' : 'gi';
 
-    // Match either word boundaries or literal exact token
-    const regex = new RegExp(`\\b${escaped}\\b`, flags);
-    let match: RegExpExecArray | null;
+    // Safe boundary assertion:
+    // Only check word boundary if term starts/ends with alphanumeric/underscore.
+    // Accurately handles hyphens ("ALPHA-RESTRICTED", "CASE-778192"), underscores, and multi-word phrases.
+    const prefix = /^[a-zA-Z0-9_]/.test(term) ? '(?<![a-zA-Z0-9_])' : '';
+    const suffix = /[a-zA-Z0-9_]$/.test(term) ? '(?![a-zA-Z0-9_])' : '';
+    const regex = new RegExp(`${prefix}${escaped}${suffix}`, flags);
 
+    let match: RegExpExecArray | null;
     while ((match = regex.exec(text)) !== null) {
       matches.push({
         category: rule.category || 'custom',
@@ -26,7 +30,8 @@ export function detectCustomRules(
         label: `Custom: "${rule.term}"`,
         metadata: {
           ruleId: rule.id,
-          suggestedAlias: rule.alias ?? '',
+          isCustomRule: true,
+          suggestedAlias: rule.alias?.trim() || undefined,
         },
       });
     }

@@ -97,13 +97,17 @@ export function sanitizeText(
   }
 
   // Overlap Resolution:
-  // Sort priority: DB_URI and Custom rules first, then longest match
+  // Sort priority: Custom rules first (absolute highest precedence), then DB_URI, then longest match
   rawMatches.sort((a, b) => {
-    // Custom rules and DB_URI take priority over generic substrings
-    const isPriorityA = a.category === 'custom' || a.category === 'db_uri';
-    const isPriorityB = b.category === 'custom' || b.category === 'db_uri';
-    if (isPriorityA && !isPriorityB) return -1;
-    if (!isPriorityA && isPriorityB) return 1;
+    const isCustomA = Boolean(a.metadata?.isCustomRule || a.category === 'custom');
+    const isCustomB = Boolean(b.metadata?.isCustomRule || b.category === 'custom');
+    if (isCustomA && !isCustomB) return -1;
+    if (!isCustomA && isCustomB) return 1;
+
+    const isDbA = a.category === 'db_uri';
+    const isDbB = b.category === 'db_uri';
+    if (isDbA && !isDbB) return -1;
+    if (!isDbA && isDbB) return 1;
 
     const lenA = a.endIndex - a.startIndex;
     const lenB = b.endIndex - b.startIndex;
@@ -186,6 +190,18 @@ export function sanitizeText(
     while ((propMatch = regex.exec(inputText)) !== null) {
       const start = propMatch.index;
       const end = start + orig.length;
+
+      // CRITICAL FORMAT PRESERVATION:
+      // Do NOT replace a token if it acts as a property key in YAML, JSON, or dotenv!
+      // e.g. "key:", "key =", '"key":'
+      const afterToken = inputText.slice(end);
+      if (/^[ \t]*[:=]/.test(afterToken)) {
+        continue; // It is a key/property name, NOT a value!
+      }
+      const beforeToken = inputText.slice(0, start);
+      if (/["'][ \t]*$/.test(beforeToken) && /^[ \t]*["'][ \t]*:/.test(afterToken)) {
+        continue; // It is a JSON object key!
+      }
 
       let isOccupied = false;
       for (let i = start; i < end; i++) {

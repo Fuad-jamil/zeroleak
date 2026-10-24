@@ -11,8 +11,12 @@ function escapeRegExp(string: string): string {
  * Restores original sensitive values in the LLM response text
  * by replacing aliases with their corresponding original values.
  *
- * Replacements are strictly sorted by alias length descending to avoid
- * partial token collisions (e.g. replacing 'user_1' inside 'user_10').
+ * Implements a SINGLE-PASS non-colliding replacement algorithm:
+ * 1. Aliases are sorted by length descending so that 'SECRET_KEY_10' matches before 'SECRET_KEY_1'
+ *    and 'user_10' matches before 'user_1'.
+ * 2. Replacements are executed in a single pass using a combined regular expression.
+ *    The returned original values are NEVER re-scanned for aliases, eliminating chained
+ *    substitution bugs and accidental double-replacement.
  */
 export function restoreText(
   llmResponse: string,
@@ -31,40 +35,60 @@ export function restoreText(
     (m) => m.enabled !== false && m.alias && m.original
   );
 
+  if (activeMappings.length === 0) {
+    return {
+      restoredText: llmResponse,
+      restoredCount: 0,
+      items: [],
+    };
+  }
+
   // CRITICAL REQUIREMENT: Sort replacements by alias length descending
-  // to prevent partial collisions (e.g., user_1 replacing inside user_12)
+  // to prevent partial collisions (e.g., SECRET_KEY_10 before SECRET_KEY_1)
   const sortedMappings = [...activeMappings].sort(
     (a, b) => b.alias.length - a.alias.length
   );
 
-  let resultText = llmResponse;
-  let totalRestoredCount = 0;
-  const restoredItems: RestoredItem[] = [];
-
-  for (const mapping of sortedMappings) {
-    const escapedAlias = escapeRegExp(mapping.alias);
-    const regex = new RegExp(escapedAlias, 'g');
-
-    // Count occurrences
-    const matches = resultText.match(regex);
-    const matchCount = matches ? matches.length : 0;
-
-    if (matchCount > 0) {
-      resultText = resultText.replace(regex, mapping.original);
-      totalRestoredCount += matchCount;
-      restoredItems.push({
-        alias: mapping.alias,
-        original: mapping.original,
-        count: matchCount,
-        category: mapping.category,
-      });
+  const aliasToMapping = new Map<string, AliasMapping>();
+  for (const m of sortedMappings) {
+    if (!aliasToMapping.has(m.alias)) {
+      aliasToMapping.set(m.alias, m);
     }
   }
 
+  // Build unified regex for all aliases
+  const escapedAliases = Array.from(aliasToMapping.keys()).map((a) => escapeRegExp(a));
+  const unifiedRegex = new RegExp(`(${escapedAliases.join('|')})`, 'g');
+
+  const restoredCounts = new Map<string, number>();
+  let totalRestoredCount = 0;
+
+  // Single-pass replacement: never re-scans already replaced text!
+  // Prevents chained substitutions and collision bugs completely.
+  const restoredText = llmResponse.replace(unifiedRegex, (matchedAlias) => {
+    const mapping = aliasToMapping.get(matchedAlias);
+    if (mapping) {
+      totalRestoredCount++;
+      restoredCounts.set(matchedAlias, (restoredCounts.get(matchedAlias) || 0) + 1);
+      return mapping.original;
+    }
+    return matchedAlias;
+  });
+
+  const restoredItems: RestoredItem[] = [];
+  for (const [alias, count] of restoredCounts.entries()) {
+    const mapping = aliasToMapping.get(alias)!;
+    restoredItems.push({
+      alias,
+      original: mapping.original,
+      count,
+      category: mapping.category,
+    });
+  }
+
   return {
-    restoredText: resultText,
+    restoredText,
     restoredCount: totalRestoredCount,
     items: restoredItems,
   };
 }
-

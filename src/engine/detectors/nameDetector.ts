@@ -1,14 +1,34 @@
 import { RawEntityMatch } from '../types';
 import {
-  UNIFIED_PERSON_TRIGGER_REGEX,
-  ARABIC_PERSON_TRIGGER_REGEX,
-  ARABIC_NAMES_IN_PAREN_REGEX,
-  ARABIC_PROMINENT_NAMES_REGEX,
   PROJECT_CODE_NAME_REGEX,
   STACKTRACE_APP_DIR_REGEX,
   COMPANY_NAME_REGEX,
   CONFIDENTIAL_ID_REGEX,
 } from '../patterns';
+
+// Contextual Role Patterns before Colon/Equals
+// Matches:
+// - "المهندس المسؤول عن قاعدة البيانات: أحمد منصور."
+// - "مديرة المشروع: سارة عبد الرحمن."
+// - "مسؤول البنية التحتية: محمد علي القحطاني."
+// - "OWNER: المهندس أحمد منصور"
+// - "BACKUP OWNER: د. سارة عبدالله"
+// - "VIP Customer: خالد محمد العريقي"
+// - "Reported by: Ahmed Hassan"
+const CONTEXTUAL_ROLE_NAME_REGEX =
+  /(?:المهندس\s+المسؤول(?:\s+عن\s+[\u0621-\u064A]+(?:\s+[\u0621-\u064A]+)?)?|مديرة?\s+المشروع|مسؤول\s+البنية\s+التحتية|مسؤول\s+الأنظمة|مسؤول\s+الأمن|المسؤول\s+عن\s+[\u0621-\u064A]+|مدير\s+[\u0621-\u064A]+|العميل|المستخدم|المطور|المشرف|المحامي|المالك|OWNER|BACKUP OWNER|ADMIN|VIP Customer|CUSTOMER|CLIENT|AUTHOR|CONTACT|SECOND CONTACT|LEAD|SECONDARY|BACKUP|CO-LEAD|DELEGATE|MANAGER|DIRECTOR|OFFICER|CONTRIBUTOR|REVIEWER|Reported by|Secondary reviewer|Lead Negotiator|Legal Counsel|Assignee|Author|User|Client|Developer|Engineer)\s*[:=]\s*(?:(?:د\.|دكتور|دكتورة|أ\.|أستاذ|أستاذة|المهندس|المهندسة|الشيخ|السيد|السيدة|Dr\.|Eng\.|Mr\.|Mrs\.|Ms\.)\s+)?([\u0621-\u064A]{2,15}(?:\s+[\u0621-\u064A]{2,15}){1,3}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})/gi;
+
+// Standalone Arabic prominent / parenthesized names
+const ARABIC_PAREN_REGEX =
+  /\(([\u0621-\u064A]{3,15}(?:\s+[\u0621-\u064A]{3,15}){1,2})\)/g;
+
+// Standalone prominent full names (must be at least 2 words)
+const ARABIC_PROMINENT_FULL_NAMES_REGEX =
+  /\b(أحمد\s+منصور|أحمد\s+علي|خالد\s+العمري|سارة\s+المنصوري|محمد\s+العتيبي|فاطمة\s+الزهراء|عبد\s*الله\s+[\u0621-\u064A]+|محمد\s+علي\s+القحطاني|سارة\s+عبد\s+الرحمن)\b/g;
+
+// General Arabic two-word human name pattern for common first names
+const ARABIC_COMMON_FULL_NAME_REGEX =
+  /(?<![\u0621-\u064A])(أحمد|محمد|علي|خالد|سارة|فاطمة|مريم|عبد\s*الله|عبد\s*الرحمن|عبد\s*العزيز|عمر|عثمان|يوسف|إبراهيم|حسن|حسين|طارق|سالم|زيد|منى|هدى|نورة|ريم|ياسر|محمود|مصطفى|بدر|سعد|فيصل|سعود|سلطان)\s+([\u0621-\u064A]{2,15}(?:\s+[\u0621-\u064A]{2,15}){0,2})(?![\u0621-\u064A])/g;
 
 export function detectNamesAndProjects(text: string): RawEntityMatch[] {
   const matches: RawEntityMatch[] = [];
@@ -77,16 +97,20 @@ export function detectNamesAndProjects(text: string): RawEntityMatch[] {
     }
   }
 
-  // 5. Unified Person Names with contextual triggers (cross-lingual Arabic & English)
-  // e.g. "OWNER: المهندس أحمد منصور", "BACKUP OWNER: د. سارة عبدالله", "VIP Customer: خالد محمد العريقي"
-  UNIFIED_PERSON_TRIGGER_REGEX.lastIndex = 0;
-  let unifiedMatch: RegExpExecArray | null;
-  while ((unifiedMatch = UNIFIED_PERSON_TRIGGER_REGEX.exec(text)) !== null) {
-    const personName = unifiedMatch[1]?.trim();
-    if (!personName || personName.length < 2) continue;
+  // 5. Contextual Person Names (Only extracts the person name AFTER the role title)
+  // Ensures role descriptions like "المهندس المسؤول عن قاعدة البيانات:" are preserved intact!
+  CONTEXTUAL_ROLE_NAME_REGEX.lastIndex = 0;
+  let roleMatch: RegExpExecArray | null;
+  while ((roleMatch = CONTEXTUAL_ROLE_NAME_REGEX.exec(text)) !== null) {
+    let personName = roleMatch[1]?.trim();
+    if (!personName || personName.length < 3) continue;
 
-    const offset = unifiedMatch[0].lastIndexOf(personName);
-    const start = unifiedMatch.index + offset;
+    // Strip trailing punctuation like . or ,
+    personName = personName.replace(/[.,;:]$/, '').trim();
+
+    // Find exact location of personName in the matched string
+    const offset = roleMatch[0].lastIndexOf(personName);
+    const start = roleMatch.index + offset;
 
     matches.push({
       category: 'person',
@@ -94,34 +118,18 @@ export function detectNamesAndProjects(text: string): RawEntityMatch[] {
       startIndex: start,
       endIndex: start + personName.length,
       label: 'Person Name',
+      metadata: {
+        isContextualPerson: true,
+      },
     });
   }
 
-  // 6. Standalone Arabic Person Triggers
-  ARABIC_PERSON_TRIGGER_REGEX.lastIndex = 0;
-  let arMatch: RegExpExecArray | null;
-  while ((arMatch = ARABIC_PERSON_TRIGGER_REGEX.exec(text)) !== null) {
-    const personName = arMatch[1]?.trim();
-    if (!personName || personName.length < 2) continue;
-
-    const offset = arMatch[0].lastIndexOf(personName);
-    const start = arMatch.index + offset;
-
-    matches.push({
-      category: 'person',
-      original: personName,
-      startIndex: start,
-      endIndex: start + personName.length,
-      label: 'Person Name (Arabic)',
-    });
-  }
-
-  // 7. Arabic Names inside parentheses: (خالد), (أحمد منصور)
-  ARABIC_NAMES_IN_PAREN_REGEX.lastIndex = 0;
+  // 6. Arabic Names inside parentheses: (خالد العمري)
+  ARABIC_PAREN_REGEX.lastIndex = 0;
   let parenMatch: RegExpExecArray | null;
-  while ((parenMatch = ARABIC_NAMES_IN_PAREN_REGEX.exec(text)) !== null) {
+  while ((parenMatch = ARABIC_PAREN_REGEX.exec(text)) !== null) {
     const name = parenMatch[1]?.trim();
-    if (!name) continue;
+    if (!name || name.length < 3) continue;
     const offset = parenMatch[0].indexOf(name);
     const start = parenMatch.index + offset;
 
@@ -134,10 +142,10 @@ export function detectNamesAndProjects(text: string): RawEntityMatch[] {
     });
   }
 
-  // 8. Prominent Arabic Names
-  ARABIC_PROMINENT_NAMES_REGEX.lastIndex = 0;
+  // 7. Prominent Multi-word Arabic Names
+  ARABIC_PROMINENT_FULL_NAMES_REGEX.lastIndex = 0;
   let promMatch: RegExpExecArray | null;
-  while ((promMatch = ARABIC_PROMINENT_NAMES_REGEX.exec(text)) !== null) {
+  while ((promMatch = ARABIC_PROMINENT_FULL_NAMES_REGEX.exec(text)) !== null) {
     const name = promMatch[1]?.trim();
     if (!name) continue;
     matches.push({
@@ -145,6 +153,21 @@ export function detectNamesAndProjects(text: string): RawEntityMatch[] {
       original: name,
       startIndex: promMatch.index,
       endIndex: promMatch.index + name.length,
+      label: 'Person Name (Arabic)',
+    });
+  }
+
+  // 8. General Arabic Person Names (Common First Names + Surnames)
+  ARABIC_COMMON_FULL_NAME_REGEX.lastIndex = 0;
+  let comMatch: RegExpExecArray | null;
+  while ((comMatch = ARABIC_COMMON_FULL_NAME_REGEX.exec(text)) !== null) {
+    const name = comMatch[0]?.trim();
+    if (!name || name.length < 5) continue;
+    matches.push({
+      category: 'person',
+      original: name,
+      startIndex: comMatch.index,
+      endIndex: comMatch.index + name.length,
       label: 'Person Name (Arabic)',
     });
   }
