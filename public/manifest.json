@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "ZeroLeak — AI Prompt Sanitizer",
+  "short_name": "ZeroLeak",
+  "version": "1.0.0",
+  "description": "100% Client-Side Reversible AI Prompt Sanitizer & Data Loss Prevention for LLMs.",
+  "author": "Fuad Jamil",
+  "homepage_url": "https://github.com/Fuad-jamil/zeroleak",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "ZeroLeak — Sanitize AI Prompt",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "contextMenus"
+  ],
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
+

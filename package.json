@@ -15,9 +15,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:extension": "tsc && vite build --config vite.config.extension.ts",
     "preview": "vite preview",
     "test": "vitest run",
-    "package": "npm run build && powershell -Command \"Compress-Archive -Path dist/index.html -DestinationPath zeroleak-standalone-v1.0.0.zip -Force\""
+    "package": "npm run build && powershell -Command \"Compress-Archive -Path dist/index.html -DestinationPath zeroleak-standalone-v1.0.0.zip -Force\"",
+    "package:extension": "npm run build:extension && powershell -Command \"Compress-Archive -Path dist-extension/* -DestinationPath zeroleak-chrome-extension-v1.0.0.zip -Force\""
   },
   "dependencies": {
     "clsx": "^2.1.1",

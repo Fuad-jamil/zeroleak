@@ -1,5 +1,5 @@
 import React from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { Moon, Sun, ExternalLink } from 'lucide-react';
 import { PresetMode } from '../engine/types';
 
 export type WorkspaceStep = 'sanitize' | 'restore';
@@ -131,6 +131,23 @@ export const Header: React.FC<HeaderProps> = ({
             <Moon className="w-4 h-4 text-slate-700" />
           )}
         </button>
+
+        {/* Extension Full-Tab Launcher (Visible only inside browser extension popup) */}
+        {typeof window !== 'undefined' && !!(window as any).chrome?.runtime?.id && (
+          <button
+            onClick={() => {
+              if ((window as any).chrome?.tabs) {
+                (window as any).chrome.tabs.create({ url: 'index.html' });
+              } else {
+                window.open('index.html', '_blank');
+              }
+            }}
+            title="Open in Full Browser Tab"
+            className="w-9 h-9 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800/60 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors cursor-pointer"
+          >
+            <ExternalLink className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </header>
   );

@@ -228,6 +228,17 @@ All services analyzed.`);
 
   useEffect(() => {
     handleLoadSample(DEVELOPER_SAMPLE);
+
+    // If running in browser extension, check for pending text from context menu
+    const chromeObj = (window as any).chrome;
+    if (chromeObj?.storage?.local) {
+      chromeObj.storage.local.get(['pendingPrompt'], (res: { pendingPrompt?: string }) => {
+        if (res?.pendingPrompt) {
+          setRawInput(res.pendingPrompt);
+          chromeObj.storage.local.remove(['pendingPrompt']);
+        }
+      });
+    }
   }, [handleLoadSample]);
 
   return (
